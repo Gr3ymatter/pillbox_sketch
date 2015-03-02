@@ -1,31 +1,28 @@
-/*********************************************************************
-This is an example for our nRF8001 Bluetooth Low Energy Breakout
-
-  Pick one up today in the adafruit shop!
-  ------> http://www.adafruit.com/products/1697
-
-Adafruit invests time and resources providing this open source code, 
-please support Adafruit and open-source hardware by purchasing 
-products from Adafruit!
-
-Written by Kevin Townsend/KTOWN  for Adafruit Industries.
-MIT license, check LICENSE for more information
-All text above, and the splash screen below must be included in any redistribution
-*********************************************************************/
-
-// This version uses the internal data queing so you can treat it like Serial (kinda)!
-
 #include <SPI.h>
-#include "Adafruit_BLE_UART.h"
+#include <Wire.h>
 #include <EEPROM.h>
+#include <RTClib.h>
+#include <RTC_DS3231.h>
+#include "Adafruit_BLE_UART.h"
 
-// Connect CLK/MISO/MOSI to hardware SPI
-// e.g. On UNO & compatible: CLK = 13, MISO = 12, MOSI = 11
-#define ADAFRUITBLE_REQ 53
-#define ADAFRUITBLE_RDY 2     // This should be an interrupt pin, on Uno thats #2 or #3
-#define ADAFRUITBLE_RST 8
+#define ADAFRUITBLE_REQ 10
+#define ADAFRUITBLE_RDY 3     // This should be an interrupt pin, on Uno thats #2 or #3
+#define ADAFRUITBLE_RST 4
 
 Adafruit_BLE_UART BTLEserial = Adafruit_BLE_UART(ADAFRUITBLE_REQ, ADAFRUITBLE_RDY, ADAFRUITBLE_RST);
+
+
+
+RTC_DS3231 RTC;
+#define PWM_COUNT 1020   //determines how often the LED flips
+#define LOOP_DELAY 5000 //ms delay time in loop
+#define RTC_SQW_IN 7     // input square wave from RTC into T1 pin (D5)                             //WE USE TIMER1 so that it does not interfere with Arduino delay() command
+#define INT0_PIN   8     // INT0 pin for 32kHz testing?
+#define LED_PIN    9     // random LED for testing...tie to ground through series resistor..
+#define LED_ONBAORD 13   // Instead of hooking up an LED, the nano has an LED at pin 13.
+
+volatile long TOGGLE_COUNT = 0;
+
 /**************************************************************************/
 /*!
     Configure the Arduino and start advertising with the radio
@@ -33,13 +30,31 @@ Adafruit_BLE_UART BTLEserial = Adafruit_BLE_UART(ADAFRUITBLE_REQ, ADAFRUITBLE_RD
 /**************************************************************************/
 void setup(void)
 { 
-  Serial.begin(9600);
+  Serial.begin(57600);
   while(!Serial); // Leonardo/Micro should wait for serial init
   Serial.println(F("Adafruit Bluefruit Low Energy nRF8001 Print echo demo"));
 
   BTLEserial.setDeviceName("PillBox"); /* 7 characters max! */
 
   BTLEserial.begin();
+  
+    Wire.begin();
+    RTC.begin();
+  
+  if (! RTC.isrunning()) {
+  Serial.println(F("RTC is NOT running!"));
+  // following line sets the RTC to the date & time this sketch was compiled
+  RTC.adjust(DateTime(__DATE__, __TIME__));    }
+
+DateTime now = RTC.now();
+DateTime compiled = DateTime(__DATE__, __TIME__);
+if (now.unixtime() < compiled.unixtime()) {
+  //Serial.println("RTC is older than compile time!  Updating");
+  RTC.adjust(DateTime(__DATE__, __TIME__));
+}
+
+RTC.enable32kHz(true);
+RTC.SQWEnable(true);    
 }
 
 /**************************************************************************/
@@ -77,13 +92,40 @@ void loop()
 
   if (status == ACI_EVT_CONNECTED) {
 
-   Call();        
+   Call(); 
+
    
 }
 }
 String medicine[4];
 int time[4];
 int med_counter = 1;
+
+void RTC_Clock()
+{
+    DateTime now = RTC.now();
+    
+    RTC.forceTempConv(true);  //DS3231 does this every 64 seconds, we are simply testing the function here
+    float temp_float = RTC.getTempAsFloat();
+    int16_t temp_word = RTC.getTempAsWord();
+    int8_t temp_hbyte = temp_word >> 8;
+    int8_t temp_lbyte = temp_word &= 0x00FF;
+    Serial.print(now.year(), DEC);    Serial.print('/');
+    Serial.print(now.month(), DEC);    Serial.print('/');
+    Serial.print(now.day(), DEC);    Serial.print(' ');
+    Serial.print(now.hour(), DEC);    Serial.print(':');
+    Serial.print(now.minute(), DEC);    Serial.print(':');
+    Serial.print(now.second(), DEC);    Serial.println();
+    //Display temps
+    Serial.print("Temp as float: ");    Serial.print(temp_float, DEC);
+    Serial.println();    Serial.print("Temp as word: ");
+    Serial.print(temp_hbyte, DEC);    Serial.print(".");
+    Serial.print(temp_lbyte, DEC);    Serial.println(); Serial.println();
+    
+    delay(LOOP_DELAY);
+}
+
+
 
 void Call()
 {
@@ -94,17 +136,18 @@ void Call()
       char c = BTLEserial.read();
       text = text + c;
       Serial.print(c);
+      Serial.println(text[0]);
     }
       
     if (text[0] == '$')
     {Serial.println();
-      Serial.println("Prescription is going to be sent from the phone to the Pill Box");
-      Serial.println("Need to log the new prescription to the EEPROM");      
+      Serial.println(F("Prescription is going to be sent from the phone to the Pill Box"));
+      Serial.println(F("Need to log the new prescription to the EEPROM"));      
       int num = text.length();
       int pillQty = text[num-1] - 48;
-      Serial.print("Prescription has ");
+      Serial.print(F("Prescription has "));
       Serial.print(pillQty);
-      Serial.println(" pills");
+      Serial.println(F(" pills"));
       
       String s = "Send Data";
       uint8_t sendbuffer[20];
@@ -124,12 +167,12 @@ void Call()
       
       
       Serial.println();
-      Serial.print("Going to recieve # ");
+      Serial.print(F("Going to recieve # "));
       Serial.print(text[1]);
-      Serial.println(" prescription:");
+      Serial.println(F(" prescription:"));
       
       int num = text.length();
-      Serial.print("Prescription length is  ");
+      Serial.print(F("Prescription length is  "));
       Serial.println(num-2);
       
       byte values = 0;
@@ -139,9 +182,9 @@ void Call()
       {  EEPROM.write(addr, text[i]);
          medicine[med_counter] = medicine[med_counter] + text[i];
          values = EEPROM.read(addr);
-         Serial.print("EEPROM address is: ");
+         Serial.print(F("EEPROM address is: "));
          Serial.println(addr);
-         Serial.print("The prescription is: ");
+         Serial.print(F("The prescription is: "));
          Serial.println(values);
          addr++;
       } 
@@ -154,12 +197,12 @@ void Call()
       else if (text[0] == '&')
       {
       Serial.println();
-      Serial.print("Going to recieve time information ");
+      Serial.print(F("Going to recieve time information "));
       Serial.print(text[1]);
-      Serial.println(" prescription:");
+      Serial.println(F(" prescription:"));
       
       int num = text.length();
-      Serial.print("Time length is  ");
+      Serial.print(F("Time length is  "));
       Serial.println(num-2);   
          
       byte values = 0;
@@ -169,7 +212,7 @@ void Call()
       { values = text[i];
        EEPROM.write(addr, text[i]);
        time[med_counter] = time[med_counter] + text[i];
-//     values = EEPROM.read(addr);Serial.print("EEPROM address is: ");Serial.println(addr);
+//     values = EEPROM.read(addr);Serial.print(F("EEPROM address is: "));Serial.println(addr);
        addr++;         
       }
       EEPROM.write(addr, '#');
@@ -203,16 +246,10 @@ void EEPROM_Read()
   Serial.println();
   address++;
   }
-  Serial.print("Complete EEPROM data : ");
+  Serial.print(F("Complete EEPROM data : "));
   Serial.println(data);
   
-
-    
-
-
-  
-
-    
+  RTC_Clock(); 
 
   }
       
